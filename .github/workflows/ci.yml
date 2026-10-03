@@ -1,0 +1,87 @@
+name: CI
+
+# No push trigger: on main, CI runs inside build-and-deploy.yml, so it still runs once per commit.
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      # Throwaway values for the runner. The real ones are the repo's ENV_* secrets and variables.
+      POSTGRES_PASSWORD: moodle
+      MOODLE_ADMIN_PASSWORD: Ci-only-Pass1!
+      MOODLE_ADMIN_EMAIL: ci@example.com
+      # No Traefik on the runner, so Moodle answers on its own address.
+      MOODLE_WWWROOT: http://localhost/moodle
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compose file is valid
+        run: docker compose -f deploy/docker-compose.yml config -q
+
+      # Fails on a mistyped image or tag before it reaches the VPS. Only db: the Moodle image is built from
+      # this repo, so CI builds it instead.
+      - name: Database image exists
+        run: docker compose -f deploy/docker-compose.yml pull --quiet db
+
+      # Tagged as compose expects, so the next step runs this build rather than pulling one.
+      - name: Build the image
+        run: docker build -t ghcr.io/indy-center/moodle:latest .
+
+      # Uses the VPS layout: the compose project runs from a directory named after the repo, next to an external
+      # traefik-shared network. up -d returns once app is healthy, which means Moodle installed into the empty
+      # database and serves its login page.
+      - name: Moodle installs and stays up
+        run: |
+          docker network create traefik-shared
+          cd deploy
+          docker compose up -d || { docker compose logs --tail 100; exit 1; }
+          sleep 15
+          docker compose ps
+          # Healthy = nothing restarting and no restarts since start.
+          if docker inspect -f '{{.State.Restarting}} {{.RestartCount}}' $(docker compose ps -aq) | grep -qv '^false 0$'; then
+            docker compose logs --tail 50
+            exit 1
+          fi
+
+      - name: Admin can sign in
+        run: |
+          cd deploy
+          docker compose exec -T app sh -c '
+            cd /tmp
+            token=$(curl -fsS -c jar http://localhost/moodle/login/index.php | grep -o "name=\"logintoken\" value=\"[^\"]*" | cut -d\" -f4)
+            curl -fsS -b jar -c jar -o /dev/null --data-urlencode username=admin \
+              --data-urlencode "password=$MOODLE_ADMIN_PASSWORD" --data-urlencode "logintoken=$token" \
+              http://localhost/moodle/login/index.php
+            # Signed in, the dashboard answers 200; signed out, it redirects to the login page.
+            test "$(curl -s -b jar -o /dev/null -w "%{http_code}" http://localhost/moodle/my/)" = 200
+          ' || { docker compose logs --tail 100 app; exit 1; }
+
+      # Restarting runs the entrypoint against an installed database: it must upgrade, not reinstall.
+      - name: Restart finds Moodle already installed
+        run: |
+          cd deploy
+          docker compose restart app
+          for i in $(seq 1 30); do
+            # The logs span both starts; only the first may have installed.
+            test "$(docker compose logs app | grep -c 'Installing Moodle')" = 1
+            docker compose exec -T app healthcheck && exit 0
+            sleep 5
+          done
+          docker compose logs --tail 100 app
+          exit 1
+
+      - name: Cron runs
+        run: |
+          cd deploy
+          for i in $(seq 1 18); do
+            docker compose logs cron | grep -q 'Cron run completed correctly' && exit 0
+            sleep 10
+          done
+          docker compose logs --tail 50 cron
+          exit 1

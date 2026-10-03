@@ -1,0 +1,100 @@
+# Moodle, deployed to /home/deploy/apps/moodle/ on the Vanderbilt VPS. build-and-deploy.yml rsyncs deploy/
+# there, so the compose project is named after the repo.
+# Renaming the repo renames the project and its volumes; the old volumes stay behind.
+services:
+  app:
+    # Built and pushed by build-and-deploy.yml.
+    image: ghcr.io/indy-center/moodle:latest
+    restart: unless-stopped
+    # Bounds Apache's 12 PHP workers (docker/apache.conf) with room to spare.
+    mem_limit: 1536m
+    depends_on:
+      db:
+        condition: service_healthy
+    # .env is written on the VPS by the deploy from the repo's ENV_* secrets and variables; it's never in git.
+    # deploy/.env.example lists the names.
+    env_file:
+      - path: .env
+        required: false
+    environment: &moodle-env
+      MOODLE_WWWROOT: ${MOODLE_WWWROOT:-https://training.flyindycenter.com/moodle}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (repo secret ENV_POSTGRES_PASSWORD)}
+      MOODLE_ADMIN_PASSWORD: ${MOODLE_ADMIN_PASSWORD:?MOODLE_ADMIN_PASSWORD must be set (repo secret ENV_MOODLE_ADMIN_PASSWORD)}
+      MOODLE_ADMIN_EMAIL: ${MOODLE_ADMIN_EMAIL:?MOODLE_ADMIN_EMAIL must be set (repo variable ENV_MOODLE_ADMIN_EMAIL)}
+    volumes:
+      # Uploaded files, caches and sessions. Named volume: the deploy rsyncs with --delete, so it can't live
+      # under deploy/.
+      - moodledata:/var/moodledata
+    # The first start installs Moodle into the empty database, which takes a few minutes.
+    healthcheck:
+      test: ['CMD', 'healthcheck']
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 15m
+    networks:
+      - traefik-shared # reachable by Traefik
+      - internal # reaches the database
+    labels:
+      - traefik.enable=true
+      # Router names are global across every app on the box; prefix them with the app's name.
+      # training.flyindycenter.com belongs to training-app's Worker; see "Routing" in the README for how
+      # /moodle reaches this router.
+      - traefik.http.routers.moodle.rule=Host(`training.flyindycenter.com`) && PathPrefix(`/moodle`)
+      - traefik.http.routers.moodle.entrypoints=websecure
+      - traefik.http.routers.moodle.tls=true
+      - traefik.http.services.moodle.loadbalancer.server.port=80
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+  # Runs Moodle's scheduled tasks every minute: forum emails, cleanup, completion, and so on.
+  cron:
+    image: ghcr.io/indy-center/moodle:latest
+    command: ['cron']
+    restart: unless-stopped
+    mem_limit: 768m
+    # app installs or upgrades the database before it reports healthy; cron must not run before that.
+    depends_on:
+      app:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment: *moodle-env
+    volumes:
+      - moodledata:/var/moodledata
+    networks:
+      - internal
+    logging: *logging
+
+  # On the app's own network only, never traefik-shared, and no ports on the host.
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: moodle
+      POSTGRES_DB: moodle
+      # Only read when the volume is first created. Changing it later doesn't change the database's password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (repo secret ENV_POSTGRES_PASSWORD)}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U moodle -d moodle']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - internal
+    logging: *logging
+
+networks:
+  traefik-shared:
+    external: true
+  internal:
+
+volumes:
+  db-data:
+  moodledata:
