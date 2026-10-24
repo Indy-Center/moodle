@@ -1,11 +1,11 @@
 # moodle
 
-[Moodle](https://moodle.org), Indy Center's learning management system, run in Docker on the Vanderbilt VPS at <https://moodle.flyindycenter.com>. Students and instructors use its web pages; nothing else calls it yet.
+[Moodle](https://moodle.org), Indy Center's learning management system, run in Docker on ALEXANDRIA, one of Indy Center's servers, at <https://moodle.flyindycenter.com>. Students and instructors use its web pages; nothing else calls it yet.
 
 [![Build and Deploy](https://github.com/Indy-Center/moodle/actions/workflows/build-and-deploy.yml/badge.svg)](https://github.com/Indy-Center/moodle/actions/workflows/build-and-deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Not deployed yet: the repository has no `ENV_*` secrets and no access to the `VANDERBILT_*` deploy credentials, so every deploy stops before it reaches the VPS. `moodle.flyindycenter.com` has no DNS record yet (see [Routing](#routing)). People sign in with Moodle's own accounts, not with identity.
+Not deployed yet: the repository has no `ENV_*` secrets and no access to the `ALEXANDRIA_*` deploy credentials, so every deploy stops before it reaches the server. `moodle.flyindycenter.com` has no DNS record yet (see [Routing](#routing)). People sign in with Moodle's own accounts, not with identity.
 
 ## HTTP surface
 
@@ -20,19 +20,19 @@ Moodle is the whole of `moodle.flyindycenter.com`, served at `/`.
 
 ## Project layout
 
-- `Dockerfile`: builds the image the VPS runs: PHP 8.3 with Apache, the PHP extensions Moodle needs, Moodle's release tarball checked against its published SHA-256, and the files in `docker/`.
+- `Dockerfile`: builds the image the server runs: PHP 8.3 with Apache, the PHP extensions Moodle needs, Moodle's release tarball checked against its published SHA-256, and the files in `docker/`.
 - `docker/config.php`: Moodle's `config.php`. Reads the address, database password and admin details from the environment.
 - `docker/apache.conf`: serves Moodle's `public/` directory at `/`, sends other paths to the router, and caps Apache at 12 PHP workers.
 - `docker/php.ini`: the PHP settings Moodle asks for, the upload limit, and OPcache.
 - `docker/entrypoint.sh`: waits for the database, installs Moodle into an empty one or upgrades an existing one, then starts Apache. With the `cron` command it runs Moodle's cron every minute instead.
 - `docker/healthcheck.sh`: requests the login page with the hostname Moodle expects.
-- `deploy/`: everything deployed to `/home/deploy/apps/moodle/` on the VPS, and nothing else.
+- `deploy/`: everything deployed to `/home/deploy/apps/moodle/` on the server, and nothing else.
   - `docker-compose.yml`: Moodle (`app`), its cron (`cron`), its Postgres database (`db`), their volumes and the Traefik labels.
   - `.env.example`: the runtime settings the deploy writes to `.env`.
   - `backup.sh` and `restore.sh`: the backup recipe and its reverse (see [Data](#data)).
 - `tests/backup-round-trip.sh`: backs up the stack CI started, restores it twice, and checks a course and its file come back.
 - `.github/workflows/ci.yml`: shellchecks the scripts, builds the image, starts the stack on the runner, then checks Moodle installs, the admin can sign in, a restart doesn't reinstall, cron runs, and the backup round trip passes.
-- `.github/workflows/build-and-deploy.yml`: runs CI, pushes the image to `ghcr.io/indy-center/moodle`, then rsyncs `deploy/` to the VPS and runs `docker compose up -d` over SSH.
+- `.github/workflows/build-and-deploy.yml`: runs CI, pushes the image to `ghcr.io/indy-center/moodle`, then rsyncs `deploy/` to ALEXANDRIA and runs `docker compose up -d` over SSH.
 
 ## Routing
 
@@ -74,7 +74,7 @@ Moodle 5.3, the next long-term support release, is due in October 2026. Upgradin
 Needs Docker.
 
 ```bash
-docker network create traefik-shared   # once; stands in for the VPS's Traefik network
+docker network create traefik-shared   # once; stands in for the server's Traefik network
 docker build -t ghcr.io/indy-center/moodle:latest .
 cd deploy
 POSTGRES_PASSWORD=moodle MOODLE_ADMIN_PASSWORD='Local-Pass1!' MOODLE_ADMIN_EMAIL=you@example.com \
@@ -87,14 +87,15 @@ With that stack freshly installed and the same variables set, `bash tests/backup
 
 ## Deployment
 
-`build-and-deploy.yml` runs on every push to `main`, and by hand from **Actions → Build and Deploy → Run workflow**. It calls `ci.yml` first and only deploys if it passes, checks the containers are still up 15 seconds later, then requests the login page at its public address. [Deploying to the VPS](https://tech.flyindycenter.com/patterns/vps-apps/) describes the pipeline.
+`build-and-deploy.yml` runs on every push to `main`, and by hand from **Actions → Build and Deploy → Run workflow**. It deploys to the server named by `SERVER` at its top, `ALEXANDRIA`, reading that server's four settings by prefix. It calls `ci.yml` first and only deploys if it passes, checks the containers are still up 15 seconds later, then requests the login page at its public address. [Deploying to the VPS](https://tech.flyindycenter.com/patterns/vps-apps/) describes the pipeline.
 
 Before the first deploy:
 
-1. An org admin adds this repository to the organization's `VANDERBILT_*` variables and secrets (all four).
+1. An org admin adds this repository to the organization's `ALEXANDRIA_*` variables and secrets (all four). Until then the deploy's SSH step fails, naming each setting it can't see.
 2. Set the repository's `ENV_*` secrets and variables; `deploy/.env.example` describes each one. Keep the source copies in 1Password.
-3. If the VPS can't pull the image, GHCR created the package private. Make `ghcr.io/indy-center/moodle` public in the package's settings and re-run the workflow.
-4. Add the CNAME in [Routing](#routing).
+3. Add the CNAME in [Routing](#routing).
+
+`ghcr.io/indy-center/moodle` is public, so the server pulls it without logging in. If a pull is ever refused, check the package's visibility in its settings.
 
 `ENV_POSTGRES_PASSWORD` is only read when the database volume is first created. Changing the secret afterwards doesn't change the database's password, and Moodle can no longer connect.
 

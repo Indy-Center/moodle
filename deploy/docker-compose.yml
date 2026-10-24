@@ -1,5 +1,5 @@
-# Moodle, deployed to /home/deploy/apps/moodle/ on the Vanderbilt VPS. build-and-deploy.yml rsyncs deploy/
-# there, so the compose project is named after the repo.
+# Moodle, deployed to /home/deploy/apps/moodle/ on ALEXANDRIA. build-and-deploy.yml rsyncs deploy/ there, so
+# the compose project is named after the repo.
 # Renaming the repo renames the project and its volumes; the old volumes stay behind.
 services:
   app:
