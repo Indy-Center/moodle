@@ -76,9 +76,11 @@ in_db sh -c '
 
 # 4. Replace moodledata, in a throwaway container of the app's image with the volume mounted as the
 #    app has it: empty it, unpack the backup's moodledata/ into it, and give it to the web server's
-#    user. Moodle makes cache, localcache, sessions and temp again as it needs them.
+#    user. Moodle makes cache, localcache, sessions and temp again as it needs them. The container
+#    carries app's labels, so traefik.enable=false keeps Traefik from sending visitors to it.
 say "replacing moodledata"
-docker compose run --rm --no-deps -T -v "$dir:/backup:ro" -e NAME="$name" --entrypoint sh app -c '
+docker compose run --rm --no-deps -T -l traefik.enable=false -v "$dir:/backup:ro" -e NAME="$name" \
+  --entrypoint sh app -c '
   set -eu
   find /var/moodledata -mindepth 1 -delete
   tar -x -f "/backup/$NAME" -C /var moodledata

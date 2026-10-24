@@ -42,7 +42,8 @@ docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -
   > "$dump" < /dev/null || { echo "backup.sh: the database dump failed" >&2; exit 1; }
 
 # 2. The archive, from a throwaway container of the app's image with moodledata mounted as the app
-#    has it and the dump beside it. Its only output on stdout is the archive.
+#    has it and the dump beside it. Its only output on stdout is the archive. It carries app's
+#    labels, so traefik.enable=false keeps Traefik from sending visitors to it.
 copy_in_container=$(
   cat << 'SH'
 set -eu
@@ -56,8 +57,8 @@ if [ -e moodledata/trashdir ]; then echo moodledata/trashdir >> /tmp/members; fi
 tar -cf - -C /backup moodle.dump -C /var --verbatim-files-from -T /tmp/members || [ $? = 1 ]
 SH
 )
-docker compose run --rm --no-deps -T -v "$dump:/backup/moodle.dump:ro" --entrypoint sh app \
-  -c "$copy_in_container" > "$archive" < /dev/null \
+docker compose run --rm --no-deps -T -l traefik.enable=false -v "$dump:/backup/moodle.dump:ro" \
+  --entrypoint sh app -c "$copy_in_container" > "$archive" < /dev/null \
   || { echo "backup.sh: copying moodledata failed" >&2; exit 1; }
 
 mv "$archive" "$out/moodle.tar"
