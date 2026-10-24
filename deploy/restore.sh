@@ -29,13 +29,11 @@ say() { echo "restore.sh: $*"; }
 work=/tmp/restore
 in_db() { docker compose exec -T -e RESTORE_DIR="$work" db "$@"; }
 
-# Set while Moodle is stopped and its data half replaced, for the message a failure leaves.
-replacing=
 on_exit() {
   local status=$?
-  if [ "$status" != 0 ] && [ -n "$replacing" ]; then
-    say "the restore failed, so Moodle and its cron are left stopped. Fix the cause and run restore.sh" >&2
-    say "again; a deploy would start Moodle on whatever the failed restore left." >&2
+  if [ "$status" != 0 ] && [ -e restore-failed ]; then
+    say "the restore failed, so Moodle and its cron are left stopped, and deploys will refuse to start" >&2
+    say "them. Fix the cause and run restore.sh again. Don't start Moodle by hand on this data." >&2
   fi
   in_db rm -rf "$work" < /dev/null > /dev/null 2>&1 || true
 }
@@ -56,10 +54,11 @@ in_db pg_restore --list "$work/moodle.dump" < /dev/null | grep ' TABLE public md
 in_db tar -t < "$backup" | grep '^moodledata/filedir/' > /dev/null || unreadable
 
 # 2. Stop Moodle and its cron, so nothing writes to the database or moodledata while they are
-#    replaced. If a later step fails they are left stopped: started on a half-restored site, Moodle
-#    would install itself afresh into an empty database.
+#    replaced. From here until both are back, the restore-failed marker in this folder stops the
+#    deploy (build-and-deploy.yml) starting Moodle: on an empty or half-loaded database, Moodle would
+#    install itself afresh. It stays if this script fails or is interrupted.
 say "stopping Moodle and its cron"
-replacing=yes
+touch restore-failed
 docker compose stop app cron
 
 # 3. Replace the database: drop it (closing any connections left), create it empty, and load the
@@ -86,11 +85,11 @@ docker compose run --rm --no-deps -T -l traefik.enable=false -v "$dir:/backup:ro
   tar -x -f "/backup/$NAME" -C /var moodledata
   chown -R www-data:www-data /var/moodledata
 ' < /dev/null
+rm -f restore-failed
 
 # 5. Start Moodle and its cron. up returns once Moodle answers; its entrypoint first upgrades the
 #    database if the backup is from an older Moodle. Then empty Moodle's caches, so nothing cached
 #    before the restore is served after it.
-replacing=
 say "starting Moodle and its cron"
 # up, not start: after a rebuild there are no containers yet to start.
 docker compose up -d --wait app cron \

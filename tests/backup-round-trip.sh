@@ -64,10 +64,16 @@ admin_signs_in() {
   ' < /dev/null
 }
 
-# Checks the backed-up course and its file are there, the later one isn't, and the admin signs in.
+# The backed-up course, and what course RT101 prints while it and its file are there.
+course_name='Round trip course'
+file_text='Made by the round trip.'
+expected="$(printf '%s\n' "$course_name" "$file_text")"
+
+# Checks the backed-up course and its file are there, the later one isn't, the admin signs in, and
+# restore.sh removed its restore-failed marker.
 check_restored() {
-  [ "$(course RT101)" = "$(printf '%s\n' 'Round trip course' 'Made by the round trip.')" ] \
-    || fail "$1: the course or its file didn't come back: $(course RT101)"
+  [ ! -e restore-failed ] || fail "$1: restore.sh succeeded but left its restore-failed marker"
+  [ "$(course RT101)" = "$expected" ] || fail "$1: the course or its file didn't come back: $(course RT101)"
   [ "$(course LATER)" = "no course LATER" ] || fail "$1: the course made after the backup is still there"
   admin_signs_in || fail "$1: the admin can't sign in"
   [ -n "$(docker compose ps -q --status running cron)" ] || fail "$1: cron isn't running"
@@ -76,9 +82,8 @@ check_restored() {
 echo "--- Known content: a course with a file, and something in each folder the backup leaves out"
 [ "$(course RT101)" = "no course RT101" ] \
   || fail "the stack already has the round trip's course; run this on a freshly installed stack"
-add_course RT101 'Round trip course' 'Made by the round trip.'
-[ "$(course RT101)" = "$(printf '%s\n' 'Round trip course' 'Made by the round trip.')" ] \
-  || fail "could not make the course: $(course RT101)"
+add_course RT101 "$course_name" "$file_text"
+[ "$(course RT101)" = "$expected" ] || fail "could not make the course: $(course RT101)"
 docker compose exec -T app sh -c 'for d in cache localcache sessions temp; do
   mkdir -p /var/moodledata/$d && touch /var/moodledata/$d/round-trip-marker; done' < /dev/null
 
@@ -115,7 +120,8 @@ docker compose down --volumes
 echo "--- Restore onto nothing"
 bash restore.sh "$backup" || fail "restore.sh exited $?"
 check_restored "after restoring onto wiped volumes"
-docker compose logs app | grep -q 'Installing Moodle' \
+docker compose logs app > "$work/app.log"
+grep -q 'Installing Moodle' "$work/app.log" \
   && fail "the app installed a new Moodle instead of starting on the restored database"
 
 echo "PASS: backup and restore round trip"
