@@ -15,7 +15,8 @@ $CFG->dbpass    = getenv('POSTGRES_PASSWORD');
 $CFG->prefix    = 'mdl_';
 $CFG->dboptions = ['dbport' => 5432, 'dbpersist' => false];
 
-// https://training.flyindycenter.com/moodle on the VPS. Moodle redirects any request for another address here.
+// https://moodle.flyindycenter.com on the server, with no path: Apache serves Moodle at /. Moodle redirects any
+// request for another address here.
 $CFG->wwwroot  = getenv('MOODLE_WWWROOT');
 $CFG->dataroot = '/var/moodledata';
 $CFG->admin    = 'admin';

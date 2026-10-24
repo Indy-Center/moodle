@@ -1,4 +1,4 @@
-# Moodle on PHP's official Apache image, served at /moodle. Moodle has no official production image, so this
+# Moodle on PHP's official Apache image, served at /. Moodle has no official production image, so this
 # builds one: PHP and its extensions, Moodle's release tarball, and the config in docker/.
 FROM php:8.3-apache-bookworm
 
@@ -21,7 +21,8 @@ RUN curl -fsSL -o /tmp/moodle.tgz "https://download.moodle.org/download.php/dire
 COPY docker/config.php /var/www/moodle/config.php
 COPY docker/php.ini /usr/local/etc/php/conf.d/moodle.ini
 COPY docker/apache.conf /etc/apache2/conf-available/moodle.conf
-RUN a2enconf moodle && a2enmod remoteip
+# Moodle replaces the image's default site, and logs requests itself (apache.conf).
+RUN a2dissite 000-default && a2disconf other-vhosts-access-log && a2enconf moodle && a2enmod remoteip
 
 COPY docker/entrypoint.sh /usr/local/bin/moodle-entrypoint
 COPY docker/healthcheck.sh /usr/local/bin/healthcheck

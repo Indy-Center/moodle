@@ -24,7 +24,7 @@ jobs:
       # The app's directory on the VPS: /home/deploy/apps/<repo name>/.
       APP: ${{ github.event.repository.name }}
       IMAGE: ghcr.io/indy-center/moodle
-      URL: https://training.flyindycenter.com/moodle
+      URL: https://moodle.flyindycenter.com
     steps:
       - uses: actions/checkout@v4
 
@@ -113,6 +113,6 @@ jobs:
           fi
           EOF
 
-      # Through Cloudflare and Traefik. Fails until /moodle is routed to the VPS; see "Routing" in the README.
+      # Through DNS and Traefik, as a visitor would. Fails until the hostname's CNAME exists; see "Routing" in the README.
       - name: Moodle answers
         run: curl -fsS -o /dev/null --retry 6 --retry-delay 10 --retry-all-errors "$URL/login/index.php"

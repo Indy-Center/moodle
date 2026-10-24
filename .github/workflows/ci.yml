@@ -17,7 +17,7 @@ jobs:
       MOODLE_ADMIN_PASSWORD: Ci-only-Pass1!
       MOODLE_ADMIN_EMAIL: ci@example.com
       # No Traefik on the runner, so Moodle answers on its own address.
-      MOODLE_WWWROOT: http://localhost/moodle
+      MOODLE_WWWROOT: http://localhost
     steps:
       - uses: actions/checkout@v4
 
@@ -54,12 +54,12 @@ jobs:
           cd deploy
           docker compose exec -T app sh -c '
             cd /tmp
-            token=$(curl -fsS -c jar http://localhost/moodle/login/index.php | grep -o "name=\"logintoken\" value=\"[^\"]*" | cut -d\" -f4)
+            token=$(curl -fsS -c jar http://localhost/login/index.php | grep -o "name=\"logintoken\" value=\"[^\"]*" | cut -d\" -f4)
             curl -fsS -b jar -c jar -o /dev/null --data-urlencode username=admin \
               --data-urlencode "password=$MOODLE_ADMIN_PASSWORD" --data-urlencode "logintoken=$token" \
-              http://localhost/moodle/login/index.php
+              http://localhost/login/index.php
             # Signed in, the dashboard answers 200; signed out, it redirects to the login page.
-            test "$(curl -s -b jar -o /dev/null -w "%{http_code}" http://localhost/moodle/my/)" = 200
+            test "$(curl -s -b jar -o /dev/null -w "%{http_code}" http://localhost/my/)" = 200
           ' || { docker compose logs --tail 100 app; exit 1; }
 
       # Restarting runs the entrypoint against an installed database: it must upgrade, not reinstall.
