@@ -29,7 +29,9 @@ Moodle is the whole of `moodle.flyindycenter.com`, served at `/`.
 - `deploy/`: everything deployed to `/home/deploy/apps/moodle/` on the VPS, and nothing else.
   - `docker-compose.yml`: Moodle (`app`), its cron (`cron`), its Postgres database (`db`), their volumes and the Traefik labels.
   - `.env.example`: the runtime settings the deploy writes to `.env`.
-- `.github/workflows/ci.yml`: builds the image, starts the stack on the runner, then checks Moodle installs, the admin can sign in, a restart doesn't reinstall, and cron runs.
+  - `backup.sh` and `restore.sh`: the backup recipe and its reverse (see [Data](#data)).
+- `tests/backup-round-trip.sh`: backs up the stack CI started, restores it twice, and checks a course and its file come back.
+- `.github/workflows/ci.yml`: shellchecks the scripts, builds the image, starts the stack on the runner, then checks Moodle installs, the admin can sign in, a restart doesn't reinstall, cron runs, and the backup round trip passes.
 - `.github/workflows/build-and-deploy.yml`: runs CI, pushes the image to `ghcr.io/indy-center/moodle`, then rsyncs `deploy/` to the VPS and runs `docker compose up -d` over SSH.
 
 ## Routing
@@ -40,7 +42,18 @@ Because the record isn't proxied, Cloudflare's 100 MB cap on a request doesn't a
 
 ## Data
 
-Two Docker volumes on the VPS, named after the repository: `moodle_db-data` (the Postgres database) and `moodle_moodledata` (uploaded files, caches, sessions). Backups are handled by a separate service. Renaming the repository starts Moodle on new, empty volumes.
+Two Docker volumes on the server, named after the repository: `moodle_db-data` (the Postgres database) and `moodle_moodledata` (uploaded files, caches, sessions). Renaming the repository starts Moodle on new, empty volumes.
+
+The server's backup runner (docker-infrastructure's README, "Backups") backs Moodle up nightly by running `deploy/backup.sh`, then encrypts and uploads what it writes. The recipe writes one file, `moodle.tar`, holding:
+
+- `moodle.dump`: the whole database, from `pg_dump` in its custom format;
+- `moodledata/`: uploaded files and Moodle's other data, without `cache`, `localcache`, `sessions` and `temp`, which Moodle makes again as it needs them.
+
+Moodle stays up while it runs, without maintenance mode. The dump is one moment of the database. The files are copied just after it, and Moodle's file store makes that safe: files are named by their content and written before the database refers to them, so a file uploaded during the copy is only an unused extra. A file deleted after the dump moves to `moodledata/trashdir`, which is copied last, and Moodle takes back a missing file from there. Cron empties the trash once a day, so only a delete in the seconds before that, during a backup, could be lost.
+
+To restore, use the runner's `backups restore moodle <backup>` on the server, which runs `deploy/restore.sh` with the decrypted `moodle.tar`. It checks the file, stops `app` and `cron`, loads the dump into an empty database, replaces `moodledata` with the backup's, starts both, and purges Moodle's caches. Everything since the backup is lost, and everyone is signed out. It works on a rebuilt server with no containers or volumes yet. If it fails after stopping Moodle, it leaves Moodle stopped (started on an empty database, Moodle would install itself afresh): fix the cause and run it again.
+
+CI tests both on every pull request: it makes a course with a file, backs up, restores over a changed site, then wipes the volumes and restores again, checking the course, its file and the admin's sign-in each time.
 
 ## Accounts
 
@@ -69,6 +82,8 @@ POSTGRES_PASSWORD=moodle MOODLE_ADMIN_PASSWORD='Local-Pass1!' MOODLE_ADMIN_EMAIL
 ```
 
 `up -d` returns once Moodle is installed, about two minutes on an empty database. Traefik isn't running locally, so either add `ports: ['80:80']` to `app` and open <http://localhost>, or use `docker compose exec app curl ...`. `docker compose down -v` throws Moodle and its data away.
+
+With that stack freshly installed and the same variables set, `bash tests/backup-round-trip.sh` runs CI's backup round trip. It replaces the stack's data, so never run it on the server.
 
 ## Deployment
 

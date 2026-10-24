@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Scripts pass shellcheck
+        run: shellcheck deploy/*.sh docker/*.sh tests/*.sh
+
       - name: Compose file is valid
         run: docker compose -f deploy/docker-compose.yml config -q
 
@@ -85,3 +88,7 @@ jobs:
           done
           docker compose logs --tail 50 cron
           exit 1
+
+      # Last, since it replaces the stack's data: back up, restore over the site, wipe the volumes, restore again.
+      - name: Back up, wipe and restore
+        run: bash tests/backup-round-trip.sh
