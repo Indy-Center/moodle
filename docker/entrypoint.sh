@@ -12,6 +12,8 @@ as_www() {
 
 # Prints "installed" or "empty", or fails while the database isn't accepting connections yet.
 db_state() {
+  # PHP code, so its $ is PHP's.
+  # shellcheck disable=SC2016
   php -r '
     $db = @pg_connect("host=db dbname=moodle user=moodle password=" . getenv("POSTGRES_PASSWORD"));
     if (!$db) { exit(1); }

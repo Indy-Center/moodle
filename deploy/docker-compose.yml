@@ -1,5 +1,5 @@
-# Moodle, deployed to /home/deploy/apps/moodle/ on the Vanderbilt VPS. build-and-deploy.yml rsyncs deploy/
-# there, so the compose project is named after the repo.
+# Moodle, deployed to /home/deploy/apps/moodle/ on ALEXANDRIA. build-and-deploy.yml rsyncs deploy/ there, so
+# the compose project is named after the repo.
 # Renaming the repo renames the project and its volumes; the old volumes stay behind.
 services:
   app:
@@ -17,7 +17,7 @@ services:
       - path: .env
         required: false
     environment: &moodle-env
-      MOODLE_WWWROOT: ${MOODLE_WWWROOT:-https://training.flyindycenter.com/moodle}
+      MOODLE_WWWROOT: ${MOODLE_WWWROOT:-https://moodle.flyindycenter.com}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (repo secret ENV_POSTGRES_PASSWORD)}
       MOODLE_ADMIN_PASSWORD: ${MOODLE_ADMIN_PASSWORD:?MOODLE_ADMIN_PASSWORD must be set (repo secret ENV_MOODLE_ADMIN_PASSWORD)}
       MOODLE_ADMIN_EMAIL: ${MOODLE_ADMIN_EMAIL:?MOODLE_ADMIN_EMAIL must be set (repo variable ENV_MOODLE_ADMIN_EMAIL)}
@@ -38,9 +38,7 @@ services:
     labels:
       - traefik.enable=true
       # Router names are global across every app on the box; prefix them with the app's name.
-      # training.flyindycenter.com belongs to training-app's Worker; see "Routing" in the README for how
-      # /moodle reaches this router.
-      - traefik.http.routers.moodle.rule=Host(`training.flyindycenter.com`) && PathPrefix(`/moodle`)
+      - traefik.http.routers.moodle.rule=Host(`moodle.flyindycenter.com`)
       - traefik.http.routers.moodle.entrypoints=websecure
       - traefik.http.routers.moodle.tls=true
       - traefik.http.services.moodle.loadbalancer.server.port=80

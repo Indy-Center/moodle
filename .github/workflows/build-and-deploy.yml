@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  # The server this app runs on, by the prefix of its four organization settings (ALEXANDRIA_HOST and so on;
+  # docker-infrastructure's README lists each server's). Moving the app to another server starts here.
+  SERVER: ALEXANDRIA
+
 concurrency:
   group: deploy-${{ github.event.repository.name }}
   cancel-in-progress: false
@@ -24,7 +29,7 @@ jobs:
       # The app's directory on the VPS: /home/deploy/apps/<repo name>/.
       APP: ${{ github.event.repository.name }}
       IMAGE: ghcr.io/indy-center/moodle
-      URL: https://training.flyindycenter.com/moodle
+      URL: https://moodle.flyindycenter.com
     steps:
       - uses: actions/checkout@v4
 
@@ -39,33 +44,58 @@ jobs:
             -t "$IMAGE:latest" -t "$IMAGE:${{ github.sha }}" .
           docker push --all-tags "$IMAGE"
 
-      # VANDERBILT_HOST and VANDERBILT_DEPLOY_USER are organization variables, the key and known_hosts are organization
+      # <SERVER>_HOST and <SERVER>_DEPLOY_USER are organization variables, the key and known_hosts are organization
       # secrets; all four are limited to selected repositories.
-      # An org admin adds this repository to each of them before the first deploy.
+      # An org admin adds this repository to each of them before the first deploy. Until then this step fails,
+      # naming the settings it can't see.
       - name: Set up SSH
         env:
-          VANDERBILT_HOST: ${{ vars.VANDERBILT_HOST }}
-          VANDERBILT_DEPLOY_USER: ${{ vars.VANDERBILT_DEPLOY_USER }}
-          VANDERBILT_DEPLOY_SSH_KEY: ${{ secrets.VANDERBILT_DEPLOY_SSH_KEY }}
-          VANDERBILT_KNOWN_HOSTS: ${{ secrets.VANDERBILT_KNOWN_HOSTS }}
+          HOST: ${{ vars[format('{0}_HOST', env.SERVER)] }}
+          DEPLOY_USER: ${{ vars[format('{0}_DEPLOY_USER', env.SERVER)] }}
+          DEPLOY_SSH_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_KEY', env.SERVER)] }}
+          KNOWN_HOSTS: ${{ secrets[format('{0}_KNOWN_HOSTS', env.SERVER)] }}
         run: |
+          missing=""
+          for name in HOST DEPLOY_USER DEPLOY_SSH_KEY KNOWN_HOSTS; do
+            [ -n "${!name}" ] || missing+=" ${SERVER}_$name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Not set, or this repository has no access:$missing"
+            exit 1
+          fi
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$VANDERBILT_DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "$VANDERBILT_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           cat > ~/.ssh/config <<EOF
           Host vps
-            HostName $VANDERBILT_HOST
-            User $VANDERBILT_DEPLOY_USER
+            HostName $HOST
+            User $DEPLOY_USER
             IdentityFile ~/.ssh/deploy_key
             IdentitiesOnly yes
             StrictHostKeyChecking yes
             BatchMode yes
           EOF
 
-      # --delete removes files dropped from deploy/; excluded files (.env) are never deleted.
+      # deploy/restore.sh leaves a restore-failed marker while the database or moodledata is missing or half
+      # replaced. Started on that, Moodle would install itself afresh, so don't deploy.
+      - name: No unfinished restore
+        run: |
+          # test exits 1 when the marker is there; ssh exits 255 when it can't reach the server, which
+          # must stop the deploy too rather than count as "no marker".
+          status=0
+          ssh vps "test ! -e apps/$APP/restore-failed" || status=$?
+          if [ "$status" = 1 ]; then
+            echo "::error title=Unfinished restore::A restore of Moodle failed or is running. Finish it with deploy/restore.sh (README, Data), then re-run this deploy."
+            exit 1
+          elif [ "$status" != 0 ]; then
+            echo "::error title=Server unreachable::Couldn't check the server for an unfinished restore (ssh exited $status)."
+            exit 1
+          fi
+
+      # --delete removes files dropped from deploy/; excluded files (.env, the restore marker) are never deleted.
       - name: Sync deploy/ to ~/apps/<app>/
-        run: rsync -rlz --delete --exclude=.env --exclude=.env.example deploy/ "vps:apps/$APP/"
+        run: rsync -rlz --delete --exclude=.env --exclude=.env.example --exclude=restore-failed deploy/ "vps:apps/$APP/"
 
       # Writes ~/apps/<app>/.env from the ENV_* settings listed below: ENV_<NAME> becomes NAME='value'.
       # The deploy owns that file and rewrites it every time, so a value changes by updating its secret
@@ -95,7 +125,7 @@ jobs:
           env_file="$(jq -rn "$filter")"
           printf '%s\n' "$env_file" | ssh vps "umask 077 && cat > apps/$APP/.env"
 
-      # The ghcr.io package is public, so the VPS pulls without logging in. up -d returns once Moodle is healthy:
+      # The ghcr.io package is public, so the server pulls without logging in. up -d returns once Moodle is healthy:
       # on the first deploy that includes installing it, and after a version bump, upgrading its database.
       - name: docker compose up -d
         run: |
@@ -113,6 +143,6 @@ jobs:
           fi
           EOF
 
-      # Through Cloudflare and Traefik. Fails until /moodle is routed to the VPS; see "Routing" in the README.
+      # Through DNS and Traefik, as a visitor would. Fails until the hostname's CNAME exists; see "Routing" in the README.
       - name: Moodle answers
         run: curl -fsS -o /dev/null --retry 6 --retry-delay 10 --retry-all-errors "$URL/login/index.php"
